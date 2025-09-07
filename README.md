@@ -1,1 +1,1 @@
-# kingdom_spices_herbs_backend_dashboard
+# herbs-dashboard-backend
