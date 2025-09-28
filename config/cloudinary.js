@@ -9,8 +9,8 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Storage configuration for different types of uploads
-const createStorage = (folder) => {
+// Storage configuration for image-only uploads
+const createImageStorage = (folder) => {
   return new CloudinaryStorage({
     cloudinary: cloudinary,
     params: {
@@ -25,10 +25,40 @@ const createStorage = (folder) => {
   });
 };
 
+// Storage configuration for certificates (images and PDFs)
+const createCertificateStorage = (folder) => {
+  return new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: (req, file) => {
+      const isImage = file.mimetype && file.mimetype.startsWith('image/');
+      const common = {
+        folder: `herbs-dashboard/${folder}`,
+        resource_type: 'auto'
+      };
+      if (isImage) {
+        return {
+          ...common,
+          allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+          transformation: [
+            { width: 1000, height: 1000, crop: 'limit' },
+            { quality: 'auto:best' },
+            { fetch_format: 'auto' }
+          ]
+        };
+      }
+      // PDFs or other non-image docs
+      return {
+        ...common,
+        allowed_formats: ['pdf']
+      };
+    }
+  });
+};
+
 // Different storage configurations
-const productStorage = createStorage('products');
-const certificateStorage = createStorage('certificates');
-const teamStorage = createStorage('team');
+const productStorage = createImageStorage('products');
+const certificateStorage = createCertificateStorage('certificates');
+const teamStorage = createImageStorage('team');
 
 // Multer configurations
 const uploadProduct = multer({ 
@@ -51,10 +81,10 @@ const uploadCertificate = multer({
     fileSize: 5 * 1024 * 1024 // 5MB limit
   },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'), false);
+      cb(new Error('Only image or PDF files are allowed'), false);
     }
   }
 });
@@ -73,18 +103,22 @@ const uploadTeam = multer({
   }
 });
 
-// Helper function to delete image from Cloudinary
-const deleteImage = async (publicId) => {
+// Helper function to delete asset from Cloudinary
+const deleteAsset = async (publicId, resourceType = 'image') => {
   try {
     if (publicId) {
-      const result = await cloudinary.uploader.destroy(publicId);
+      const result = await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
       return result;
     }
   } catch (error) {
-    console.error('Error deleting image from Cloudinary:', error);
+    console.error('Error deleting asset from Cloudinary:', error);
     throw error;
   }
 };
+
+// Backwards compatible helpers
+const deleteImage = async (publicId) => deleteAsset(publicId, 'image');
+const deleteRaw = async (publicId) => deleteAsset(publicId, 'raw');
 
 // Helper function to extract public ID from Cloudinary URL
 const extractPublicId = (url) => {
@@ -116,5 +150,7 @@ module.exports = {
   uploadCertificate,
   uploadTeam,
   deleteImage,
+  deleteRaw,
+  deleteAsset,
   extractPublicId
 };

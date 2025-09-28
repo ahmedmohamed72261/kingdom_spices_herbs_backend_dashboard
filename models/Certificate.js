@@ -14,8 +14,7 @@ const certificateSchema = new mongoose.Schema({
     maxlength: [1000, 'Description cannot exceed 1000 characters']
   },
   image: {
-    type: String,
-    required: [true, 'Certificate image is required']
+    type: String
   },
   imagePublicId: {
     type: String // Cloudinary public ID for image management
@@ -46,7 +45,10 @@ const certificateSchema = new mongoose.Schema({
     default: 'other'
   },
   documentUrl: {
-    type: String // URL to the actual certificate document
+    type: String // URL to the actual certificate document (e.g., PDF)
+  },
+  documentPublicId: {
+    type: String // Cloudinary public ID for the uploaded document (raw/pdf)
   }
 }, {
   timestamps: true

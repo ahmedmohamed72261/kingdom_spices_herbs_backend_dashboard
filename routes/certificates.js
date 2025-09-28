@@ -2,7 +2,7 @@ const express = require('express');
 const { body, validationResult, query } = require('express-validator');
 const Certificate = require('../models/Certificate');
 const { adminAuth } = require('../middleware/auth');
-const { uploadCertificate, deleteImage, extractPublicId } = require('../config/cloudinary');
+const { uploadCertificate, deleteImage, deleteRaw, extractPublicId } = require('../config/cloudinary');
 
 const router = express.Router();
 
@@ -115,7 +115,19 @@ router.get('/:id', async (req, res) => {
 // @access  Private (Admin)
 router.post('/', [
   adminAuth,
-  uploadCertificate.single('image'),
+  // Accept optional 'image' and optional 'document' (PDF)
+  (req, res, next) => {
+    const upload = uploadCertificate.fields([
+      { name: 'image', maxCount: 1 },
+      { name: 'document', maxCount: 1 }
+    ]);
+    upload(req, res, function(err) {
+      if (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      next();
+    });
+  },
   body('name')
     .trim()
     .isLength({ min: 1, max: 100 })
@@ -149,28 +161,42 @@ router.post('/', [
       });
     }
 
-    const { name, description, category, issuer, certificateNumber, issueDate, expiryDate, documentUrl } = req.body;
+    const { name, description, category, issuer, certificateNumber, issueDate, expiryDate } = req.body;
 
-    // Check if image was uploaded or URL provided
-    let imageUrl, imagePublicId;
-    
-    if (req.file) {
-      imageUrl = req.file.path;
-      imagePublicId = req.file.filename;
-    } else if (req.body.imageUrl) {
-      imageUrl = req.body.imageUrl;
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: 'Certificate image is required'
-      });
+    // Gather uploaded files
+    const imageFile = req.files && req.files.image && req.files.image[0];
+    const documentFile = req.files && req.files.document && req.files.document[0];
+
+    // Accept either image, document, or external URLs
+    const bodyImageUrl = req.body.imageUrl;
+    const bodyDocumentUrl = req.body.documentUrl;
+
+    if (!imageFile && !documentFile && !bodyImageUrl && !bodyDocumentUrl) {
+      return res.status(400).json({ success: false, message: 'Provide at least an image or a document' });
+    }
+
+    let imageUrl, imagePublicId, documentUrl, documentPublicId;
+    if (imageFile) {
+      imageUrl = imageFile.path;
+      imagePublicId = imageFile.filename;
+    } else if (bodyImageUrl) {
+      imageUrl = bodyImageUrl;
+    }
+
+    if (documentFile) {
+      documentUrl = documentFile.path;
+      documentPublicId = documentFile.filename;
+    } else if (bodyDocumentUrl) {
+      documentUrl = bodyDocumentUrl;
     }
 
     const certificateData = {
       name,
       description,
       image: imageUrl,
-      imagePublicId
+      imagePublicId,
+      documentUrl,
+      documentPublicId
     };
 
     // Add optional fields
@@ -179,7 +205,7 @@ router.post('/', [
     if (certificateNumber) certificateData.certificateNumber = certificateNumber;
     if (issueDate) certificateData.issueDate = new Date(issueDate);
     if (expiryDate) certificateData.expiryDate = new Date(expiryDate);
-    if (documentUrl) certificateData.documentUrl = documentUrl;
+    // already set above if present
 
     const certificate = new Certificate(certificateData);
     await certificate.save();
@@ -213,7 +239,18 @@ router.post('/', [
 // @access  Private (Admin)
 router.put('/:id', [
   adminAuth,
-  uploadCertificate.single('image'),
+  (req, res, next) => {
+    const upload = uploadCertificate.fields([
+      { name: 'image', maxCount: 1 },
+      { name: 'document', maxCount: 1 }
+    ]);
+    upload(req, res, function(err) {
+      if (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      next();
+    });
+  },
   body('name')
     .optional()
     .trim()
@@ -260,8 +297,12 @@ router.put('/:id', [
 
     const { name, description, category, issuer, certificateNumber, issueDate, expiryDate, documentUrl, isActive } = req.body;
 
+    // Gather uploaded files
+    const imageFile = req.files && req.files.image && req.files.image[0];
+    const documentFile = req.files && req.files.document && req.files.document[0];
+
     // Handle image update
-    if (req.file) {
+    if (imageFile) {
       // Delete old image if it exists and was uploaded to Cloudinary
       if (certificate.imagePublicId) {
         try {
@@ -270,9 +311,8 @@ router.put('/:id', [
           console.error('Error deleting old image:', error);
         }
       }
-      
-      certificate.image = req.file.path;
-      certificate.imagePublicId = req.file.filename;
+      certificate.image = imageFile.path;
+      certificate.imagePublicId = imageFile.filename;
     } else if (req.body.imageUrl && req.body.imageUrl !== certificate.image) {
       // Delete old image if switching to URL
       if (certificate.imagePublicId) {
@@ -285,6 +325,29 @@ router.put('/:id', [
       
       certificate.image = req.body.imageUrl;
       certificate.imagePublicId = undefined;
+    }
+
+    // Handle document update
+    if (documentFile) {
+      if (certificate.documentPublicId) {
+        try {
+          await deleteRaw(certificate.documentPublicId);
+        } catch (error) {
+          console.error('Error deleting old document:', error);
+        }
+      }
+      certificate.documentUrl = documentFile.path;
+      certificate.documentPublicId = documentFile.filename;
+    } else if (req.body.documentUrl && req.body.documentUrl !== certificate.documentUrl) {
+      if (certificate.documentPublicId) {
+        try {
+          await deleteRaw(certificate.documentPublicId);
+        } catch (error) {
+          console.error('Error deleting old document:', error);
+        }
+      }
+      certificate.documentUrl = req.body.documentUrl;
+      certificate.documentPublicId = undefined;
     }
 
     // Update fields
